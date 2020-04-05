@@ -19,7 +19,7 @@ Next, apply the provided patch file using `git apply patchfile.diff` in the repo
 
 ## Section 1. Motivation
 
-We crawled Google Scholar using [this script](https://github.com/hyrise/hyrise/wiki/Step-by-Step-Guide) from Strobel and Hofmann. Raw data is contained in the downloadable repository.
+We crawled Google Scholar using [this script](https://github.com/Pold87/academic-keyword-occurrence/blob/master/extract_occurrences.py) from Strobel and Hofmann. Raw data is contained in the downloadable repository.
 
 ## Section 3. Experimental Setup
 
