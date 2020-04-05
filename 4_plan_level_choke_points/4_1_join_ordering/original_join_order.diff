@@ -1,0 +1,151 @@
+diff --git a/src/lib/expression/abstract_expression.hpp b/src/lib/expression/abstract_expression.hpp
+index a32b46035..8b1738f10 100644
+--- a/src/lib/expression/abstract_expression.hpp
++++ b/src/lib/expression/abstract_expression.hpp
+@@ -99,6 +99,8 @@ class AbstractExpression : public std::enable_shared_from_this<AbstractExpressio
+   const ExpressionType type;
+   std::vector<std::shared_ptr<AbstractExpression>> arguments;
+
++  size_t id{0};
++
+  protected:
+   /**
+    * Override to check for equality without checking the arguments. No override needed if derived expression has no
+diff --git a/src/lib/logical_query_plan/predicate_node.cpp b/src/lib/logical_query_plan/predicate_node.cpp
+index 06f567ccf..80a3c0379 100644
+--- a/src/lib/logical_query_plan/predicate_node.cpp
++++ b/src/lib/logical_query_plan/predicate_node.cpp
+@@ -24,7 +24,7 @@ std::string PredicateNode::description(const DescriptionMode mode) const {
+   const auto expression_mode = _expression_description_mode(mode);
+
+   std::stringstream stream;
+-  stream << "[Predicate] " << predicate()->description(expression_mode);
++  stream << "[Predicate " << predicate()->id << "] " << predicate()->description(expression_mode);
+   return stream.str();
+ }
+
+diff --git a/src/lib/optimizer/join_ordering/greedy_operator_ordering.cpp b/src/lib/optimizer/join_ordering/greedy_operator_ordering.cpp
+index b406ac0a6..0834f58eb 100644
+--- a/src/lib/optimizer/join_ordering/greedy_operator_ordering.cpp
++++ b/src/lib/optimizer/join_ordering/greedy_operator_ordering.cpp
+@@ -41,6 +41,10 @@ std::shared_ptr<AbstractLQPNode> GreedyOperatorOrdering::operator()(
+   auto remaining_edge_indices = std::vector<size_t>{};
+   for (auto edge_idx = size_t{0}; edge_idx < join_graph.edges.size(); ++edge_idx) {
+     const auto& edge = join_graph.edges[edge_idx];
++    // std::cout << "edge " << edge_idx << std::endl;
++    // for (const auto& predicate : edge.predicates) {
++    //   std::cout << "\t" << predicate->id << ": " << *predicate << std::endl;
++    // }
+
+     if (edge.vertex_set.none()) {
+       uncorrelated_predicates.insert(uncorrelated_predicates.end(), edge.predicates.begin(), edge.predicates.end());
+@@ -71,10 +75,23 @@ std::shared_ptr<AbstractLQPNode> GreedyOperatorOrdering::operator()(
+
+   while (!remaining_edge_indices.empty()) {
+     /**
+-     * 2.1 Find the edge with the lowest cardinality and remove it from "remaining_edge_indices"
++     * 2.1 Find the edge with the highest predicate id (added last, meaning it was first in the SQL query)
+      */
+     std::sort(remaining_edge_indices.begin(), remaining_edge_indices.end(),
+-              [&](const auto& lhs, const auto& rhs) { return plan_by_edge[lhs].second > plan_by_edge[rhs].second; });
++              [&](const auto& lhs, const auto& rhs) {
++                auto lhs_max_id = size_t{0};
++                for (const auto& predicate : join_graph.edges[lhs].predicates) {
++                  lhs_max_id = std::max(lhs_max_id, predicate->id);
++                }
++
++                auto rhs_max_id = size_t{0};
++                for (const auto& predicate : join_graph.edges[rhs].predicates) {
++                  rhs_max_id = std::max(rhs_max_id, predicate->id);
++                }
++
++                // std::cout << lhs_max_id << " ./. " << rhs_max_id << std::endl;
++
++                return rhs_max_id > lhs_max_id; });
+
+     const auto lowest_cardinality_edge_idx = remaining_edge_indices.back();
+     remaining_edge_indices.pop_back();
+diff --git a/src/lib/optimizer/strategy/join_ordering_rule.cpp b/src/lib/optimizer/strategy/join_ordering_rule.cpp
+index a7a4bf60c..7a52bb96a 100644
+--- a/src/lib/optimizer/strategy/join_ordering_rule.cpp
++++ b/src/lib/optimizer/strategy/join_ordering_rule.cpp
+@@ -69,11 +69,11 @@ std::shared_ptr<AbstractLQPNode> JoinOrderingRule::_perform_join_ordering_recurs
+    */
+   // TODO(anybody) Increase X once our costing/cardinality estimation is faster/uses internal caching
+   auto result_lqp = std::shared_ptr<AbstractLQPNode>{};
+-  if (join_graph->vertices.size() < 9) {
+-    result_lqp = DpCcp{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
+-  } else {
++  // if (join_graph->vertices.size() < 9) {
++  //   result_lqp = DpCcp{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
++  // } else {
+     result_lqp = GreedyOperatorOrdering{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
+-  }
++  // }
+
+   for (const auto& vertex : join_graph->vertices) {
+     _recurse_to_inputs(vertex);
+diff --git a/src/lib/sql/sql_translator.cpp b/src/lib/sql/sql_translator.cpp
+index 61c04bbea..46cc1ce49 100644
+--- a/src/lib/sql/sql_translator.cpp
++++ b/src/lib/sql/sql_translator.cpp
+@@ -686,6 +686,7 @@ SQLTranslator::TableSourceState SQLTranslator::_translate_predicated_join(const
+       right_local_predicates.emplace_back(predicate);
+     } else {
+       // Accept any kind of predicate here and let the LQPTranslator fail on those that it doesn't support
++      predicate->id = predicate_id++;
+       join_predicates.emplace_back(predicate);
+     }
+   }
+@@ -1229,7 +1230,9 @@ std::shared_ptr<AbstractLQPNode> SQLTranslator::_translate_predicate_expression(
+   switch (expression->type) {
+     case ExpressionType::Predicate: {
+       const auto predicate_expression = std::static_pointer_cast<AbstractPredicateExpression>(expression);
+-      return PredicateNode::make(expression, current_node);
++      auto p = PredicateNode::make(expression, current_node);
++      static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++      return p;
+     }
+
+     case ExpressionType::Logical: {
+@@ -1238,15 +1241,23 @@ std::shared_ptr<AbstractLQPNode> SQLTranslator::_translate_predicate_expression(
+       switch (logical_expression->logical_operator) {
+         case LogicalOperator::And: {
+           current_node = _translate_predicate_expression(logical_expression->right_operand(), current_node);
+-          return _translate_predicate_expression(logical_expression->left_operand(), current_node);
++          auto p = _translate_predicate_expression(logical_expression->left_operand(), current_node);
++          static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++          return p;
++        }
++        case LogicalOperator::Or: {
++          auto p = PredicateNode::make(expression, current_node);
++          static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++          return p;
+         }
+-        case LogicalOperator::Or:
+-          return PredicateNode::make(expression, current_node);
+       }
+     } break;
+
+-    case ExpressionType::Exists:
+-      return PredicateNode::make(expression, current_node);
++    case ExpressionType::Exists: {
++      auto p = PredicateNode::make(expression, current_node);
++      static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++      return p;
++    }
+
+     default:
+       FailInput("Cannot use this ExpressionType as predicate");
+diff --git a/src/lib/sql/sql_translator.hpp b/src/lib/sql/sql_translator.hpp
+index 95f0afeb0..f2aa3f741 100644
+--- a/src/lib/sql/sql_translator.hpp
++++ b/src/lib/sql/sql_translator.hpp
+@@ -178,6 +178,7 @@ class SQLTranslator final {
+   std::shared_ptr<ParameterIDAllocator> _parameter_id_allocator;
+   std::optional<TableSourceState> _from_clause_result;
+   std::unordered_map<std::string, std::shared_ptr<LQPView>> _with_descriptions;
++  mutable size_t predicate_id{1};
+
+   // "Inflated" because all wildcards will be inflated to the expressions they actually represent
+   std::vector<SelectListElement> _inflated_select_list_elements;

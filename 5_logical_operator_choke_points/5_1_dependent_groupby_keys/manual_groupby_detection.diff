@@ -1,0 +1,113 @@
+diff --git a/src/benchmarklib/tpch/tpch_queries.cpp b/src/benchmarklib/tpch/tpch_queries.cpp
+index 481845685..53de8d944 100644
+--- a/src/benchmarklib/tpch/tpch_queries.cpp
++++ b/src/benchmarklib/tpch/tpch_queries.cpp
+@@ -97,12 +97,12 @@ const char* const tpch_query_2 =
+  * The limit is not part of the printed query but hidden in the specification text.
+  */
+ const char* const tpch_query_3 =
+-    R"(SELECT l_orderkey, SUM(l_extendedprice*(1-l_discount)) as revenue, o_orderdate, o_shippriority
++    R"(SELECT l_orderkey, SUM(l_extendedprice*(1-l_discount)) as revenue, ANY(o_orderdate), ANY(o_shippriority)
+       FROM customer, orders, lineitem
+       WHERE c_mktsegment = ? AND c_custkey = o_custkey AND l_orderkey = o_orderkey
+       AND o_orderdate < ? AND l_shipdate > ?
+-      GROUP BY l_orderkey, o_orderdate, o_shippriority
+-      ORDER BY revenue DESC, o_orderdate
++      GROUP BY l_orderkey
++      ORDER BY revenue DESC, ANY(o_orderdate)
+       LIMIT 10;)";
+
+ /**
+@@ -416,12 +416,12 @@ const char* const tpch_query_9 =
+  *    b. pre-calculate date operation
+  */
+ const char* const tpch_query_10 =
+-    R"(SELECT c_custkey, c_name, SUM(l_extendedprice * (1 - l_discount)) as revenue, c_acctbal, n_name, c_address,
+-      c_phone, c_comment
++    R"(SELECT c_custkey, ANY(c_name), SUM(l_extendedprice * (1 - l_discount)) as revenue, ANY(c_acctbal), ANY(n_name), ANY(c_address),
++      ANY(c_phone), ANY(c_comment)
+       FROM customer, orders, lineitem, nation
+       WHERE c_custkey = o_custkey AND l_orderkey = o_orderkey AND o_orderdate >= ?
+       AND o_orderdate < ? AND l_returnflag = 'R' AND c_nationkey = n_nationkey
+-      GROUP BY c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment
++      GROUP BY c_custkey
+       ORDER BY revenue DESC LIMIT 20;)";
+
+ /**
+@@ -662,10 +662,10 @@ const char* const tpch_query_17 =
+  * The limit is not part of the printed query but hidden in the specification text.
+  */
+ const char* const tpch_query_18 =
+-    R"(SELECT c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, SUM(l_quantity)
++    R"(SELECT ANY(c_name), c_custkey, o_orderkey, ANY(o_orderdate), ANY(o_totalprice), SUM(l_quantity)
+       FROM customer, orders, lineitem WHERE o_orderkey in (SELECT l_orderkey FROM lineitem
+       GROUP BY l_orderkey having SUM(l_quantity) > ?) AND c_custkey = o_custkey AND o_orderkey = l_orderkey
+-      GROUP BY c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice ORDER BY o_totalprice DESC, o_orderdate
++      GROUP BY c_custkey, o_orderkey ORDER BY ANY(o_totalprice) DESC, ANY(o_orderdate)
+       LIMIT 100;)";
+
+ /**
+diff --git a/src/lib/logical_query_plan/aggregate_node.cpp b/src/lib/logical_query_plan/aggregate_node.cpp
+index 9b3362bb0..6d66e86fb 100644
+--- a/src/lib/logical_query_plan/aggregate_node.cpp
++++ b/src/lib/logical_query_plan/aggregate_node.cpp
+@@ -64,18 +64,18 @@ const std::vector<std::shared_ptr<AbstractExpression>>& AggregateNode::column_ex
+   _column_expressions.resize(node_expressions.size());
+   std::copy(node_expressions.begin(), node_expressions.end(), _column_expressions.begin());
+
+-  for (auto expression_idx = aggregate_expressions_begin_idx; expression_idx < _column_expressions.size();
+-       ++expression_idx) {
+-    auto& column_expression = _column_expressions[expression_idx];
+-    DebugAssert(column_expression->type == ExpressionType::Aggregate,
+-                "Unexpected non-aggregate in list of aggregates.");
+-    if (column_expression->type == ExpressionType::Aggregate) {
+-      const auto& aggregate_expression = static_cast<AggregateExpression&>(*column_expression);
+-      if (aggregate_expression.aggregate_function == AggregateFunction::Any) {
+-        column_expression = column_expression->arguments[0];
+-      }
+-    }
+-  }
++  // for (auto expression_idx = aggregate_expressions_begin_idx; expression_idx < _column_expressions.size();
++  //      ++expression_idx) {
++  //   auto& column_expression = _column_expressions[expression_idx];
++  //   DebugAssert(column_expression->type == ExpressionType::Aggregate,
++  //               "Unexpected non-aggregate in list of aggregates.");
++  //   if (column_expression->type == ExpressionType::Aggregate) {
++  //     const auto& aggregate_expression = static_cast<AggregateExpression&>(*column_expression);
++  //     if (aggregate_expression.aggregate_function == AggregateFunction::Any) {
++  //       column_expression = column_expression->arguments[0];
++  //     }
++  //   }
++  // }
+
+   return _column_expressions;
+ }
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index a48965dba..475aee7f8 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -92,7 +92,7 @@ namespace opossum {
+ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   const auto optimizer = std::make_shared<Optimizer>();
+
+-  optimizer->add_rule(std::make_unique<DependentGroupByReductionRule>());
++//  optimizer->add_rule(std::make_unique<DependentGroupByReductionRule>());
+
+   optimizer->add_rule(std::make_unique<ExpressionReductionRule>());
+
+diff --git a/src/lib/sql/sql_translator.cpp b/src/lib/sql/sql_translator.cpp
+index 61c04bbea..080fe771e 100644
+--- a/src/lib/sql/sql_translator.cpp
++++ b/src/lib/sql/sql_translator.cpp
+@@ -1367,10 +1367,9 @@ std::shared_ptr<AbstractExpression> SQLTranslator::_translate_hsql_expr(
+           case AggregateFunction::Sum:
+           case AggregateFunction::Avg:
+           case AggregateFunction::StandardDeviationSample:
++          case AggregateFunction::Any:
+             return std::make_shared<AggregateExpression>(
+                 aggregate_function, _translate_hsql_expr(*expr.exprList->front(), sql_identifier_resolver));
+-          case AggregateFunction::Any:
+-            Fail("ANY() is an internal aggregation function.");
+           case AggregateFunction::Count:
+           case AggregateFunction::CountDistinct:
+             if (expr.exprList->front()->type == hsql::kExprStar) {

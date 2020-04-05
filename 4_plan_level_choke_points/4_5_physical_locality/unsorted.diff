@@ -1,0 +1,26 @@
+diff --git a/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp b/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
+index 7c61bf930..cf32256e2 100644
+--- a/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
++++ b/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
+@@ -74,7 +74,7 @@ void TPCHBenchmarkItemRunner::on_tables_loaded() {
+   // Make sure that sort order, indexes, and constraints have made it all the way up to here
+   const auto orders_table = Hyrise::get().storage_manager.get_table("orders");
+   const auto first_chunk = orders_table->get_chunk(ChunkID{0});
+-  Assert(first_chunk->ordered_by(), "Ordering information was lost");
++  // Assert(first_chunk->ordered_by(), "Ordering information was lost");
+   if (_config->indexes) {
+     const auto indexed_column_ids = std::vector<ColumnID>{ColumnID{0}};
+     Assert(!first_chunk->get_indexes(indexed_column_ids).empty(), "Index was lost");
+diff --git a/src/benchmarklib/tpch/tpch_table_generator.cpp b/src/benchmarklib/tpch/tpch_table_generator.cpp
+index 227066ea7..c79ba2877 100644
+--- a/src/benchmarklib/tpch/tpch_table_generator.cpp
++++ b/src/benchmarklib/tpch/tpch_table_generator.cpp
+@@ -325,7 +325,7 @@ AbstractTableGenerator::IndexesByTable TPCHTableGenerator::_indexes_by_table() c
+
+ AbstractTableGenerator::SortOrderByTable TPCHTableGenerator::_sort_order_by_table() const {
+   // Allowed as per TPC-H Specification, paragraph 1.5.2
+-  return {{"lineitem", "l_shipdate"}, {"orders", "o_orderdate"}};
++  return {/*{"lineitem", "l_shipdate"}, {"orders", "o_orderdate"}*/};
+ }
+
+ void TPCHTableGenerator::_add_constraints(

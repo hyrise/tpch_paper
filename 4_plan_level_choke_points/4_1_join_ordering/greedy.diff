@@ -1,0 +1,17 @@
+diff --git a/src/lib/optimizer/strategy/join_ordering_rule.cpp b/src/lib/optimizer/strategy/join_ordering_rule.cpp
+index a7a4bf60c..f5bd1e5bf 100644
+--- a/src/lib/optimizer/strategy/join_ordering_rule.cpp
++++ b/src/lib/optimizer/strategy/join_ordering_rule.cpp
+@@ -69,11 +69,7 @@ std::shared_ptr<AbstractLQPNode> JoinOrderingRule::_perform_join_ordering_recurs
+    */
+   // TODO(anybody) Increase X once our costing/cardinality estimation is faster/uses internal caching
+   auto result_lqp = std::shared_ptr<AbstractLQPNode>{};
+-  if (join_graph->vertices.size() < 9) {
+-    result_lqp = DpCcp{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
+-  } else {
+-    result_lqp = GreedyOperatorOrdering{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
+-  }
++  result_lqp = GreedyOperatorOrdering{}(*join_graph, caching_cost_estimator);  // NOLINT - doesn't like `{}()`
+
+   for (const auto& vertex : join_graph->vertices) {
+     _recurse_to_inputs(vertex);

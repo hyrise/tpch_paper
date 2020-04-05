@@ -1,0 +1,13 @@
+diff --git a/src/lib/optimizer/strategy/semi_join_reduction_rule.cpp b/src/lib/optimizer/strategy/semi_join_reduction_rule.cpp
+index ce43ba7ec..7cf002247 100644
+--- a/src/lib/optimizer/strategy/semi_join_reduction_rule.cpp
++++ b/src/lib/optimizer/strategy/semi_join_reduction_rule.cpp
+@@ -60,7 +60,7 @@ void SemiJoinReductionRule::apply_to(const std::shared_ptr<AbstractLQPNode>& roo
+         // that they might be pushed down in the LQP to a point where they are more beneficial (e.g., below an
+         // Aggregate).
+         if (original_cardinality == 0 || (reduced_cardinality / original_cardinality) > MINIMUM_SELECTIVITY) {
+-          return;
++//          return;
+         }
+
+         // For `t1 JOIN t2 on t1.a = t2.a` where a semi join reduction is supposed to be added to t1, `t1.a = t2.a`

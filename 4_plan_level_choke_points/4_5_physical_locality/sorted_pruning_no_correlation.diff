@@ -1,0 +1,113 @@
+Markus.Dreseler@nemea:~/hyrise/build-release/paper_results/cp32_locality$ gd
+diff --git a/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp b/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
+index a54285a1d..d226f6df7 100644
+--- a/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
++++ b/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
+@@ -29,7 +29,7 @@ class AbstractDereferencedColumnTableScanImpl : public AbstractTableScanImpl {
+
+   std::shared_ptr<PosList> scan_chunk(const ChunkID chunk_id) const override;
+
+-  const PredicateCondition predicate_condition;
++  mutable PredicateCondition predicate_condition;
+
+  protected:
+   void _scan_reference_segment(const ReferenceSegment& segment, const ChunkID chunk_id, PosList& matches) const;
+diff --git a/src/lib/operators/table_scan/column_between_table_scan_impl.cpp b/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
+index 6e004aa6b..2c09d60da 100644
+--- a/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
+@@ -88,6 +88,8 @@ void ColumnBetweenTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+
+   auto attribute_vector_iterable = create_iterable_from_attribute_vector(segment);
+
++  const auto& column_name = _in_table->column_name(_column_id);
++  if (column_name == "l_shipdate" || column_name == "o_orderdate") {
+   /**
+    * Early out: All entries (except NULLs) match
+    */
+@@ -107,6 +109,13 @@ void ColumnBetweenTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+   if (lower_bound_value_id == INVALID_VALUE_ID || lower_bound_value_id >= upper_bound_value_id) {
+     return;
+   }
++  } else {
++  if (lower_bound_value_id == INVALID_VALUE_ID || lower_bound_value_id >= upper_bound_value_id) {
++    // Need to repair the value ids if the shortcut is not taken
++    lower_bound_value_id = 0;
++    upper_bound_value_id = 0;
++  }
++  }
+
+   /**
+    * No early out possible: Actually scan the attribute vector
+diff --git a/src/lib/operators/table_scan/column_like_table_scan_impl.cpp b/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
+index 0607fe724..2c852dd09 100644
+--- a/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
+@@ -86,6 +86,8 @@ void ColumnLikeTableScanImpl::_scan_dictionary_segment(const BaseDictionarySegme
+
+   auto attribute_vector_iterable = create_iterable_from_attribute_vector(segment);
+
++  const auto& column_name = _in_table->column_name(_column_id);
++  if (column_name == "l_shipdate" || column_name == "o_orderdate") {
+   // LIKE matches all rows, but we still need to check for NULL
+   if (match_count == dictionary_matches.size()) {
+     attribute_vector_iterable.with_iterators(position_filter, [&](auto it, auto end) {
+@@ -100,6 +102,7 @@ void ColumnLikeTableScanImpl::_scan_dictionary_segment(const BaseDictionarySegme
+   if (match_count == 0u) {
+     return;
+   }
++  }
+
+   const auto dictionary_lookup = [&dictionary_matches](const auto& position) {
+     return dictionary_matches[position.value()];
+diff --git a/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp b/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
+index 5cc94393f..12758cd1f 100644
+--- a/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
+@@ -88,7 +88,7 @@ void ColumnVsValueTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+    * column >= value  |  value_id >= dict.lower_bound(value)
+    */
+
+-  const auto search_value_id = _get_search_value_id(segment);
++  auto search_value_id = _get_search_value_id(segment);
+
+   /**
+    * Early Outs
+@@ -104,6 +104,8 @@ void ColumnVsValueTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+
+   auto iterable = create_iterable_from_attribute_vector(segment);
+
++  const auto& column_name = _in_table->column_name(_column_id);
++  if (column_name == "l_shipdate" || column_name == "o_orderdate") {
+   if (_value_matches_all(segment, search_value_id)) {
+     iterable.with_iterators(position_filter, [&](auto it, auto end) {
+       static const auto always_true = [](const auto&) { return true; };
+@@ -117,6 +119,13 @@ void ColumnVsValueTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+   if (_value_matches_none(segment, search_value_id)) {
+     return;
+   }
++  } else {
++  if (_value_matches_none(segment, search_value_id)) {
++    // Fix comparison
++    predicate_condition = PredicateCondition::Equals;
++    search_value_id = INVALID_VALUE_ID - 1;
++  }
++  }
+
+   _with_operator_for_dict_segment_scan([&](auto predicate_comparator) {
+     auto comparator = [predicate_comparator, search_value_id](const auto& position) {
+diff --git a/src/lib/optimizer/strategy/chunk_pruning_rule.cpp b/src/lib/optimizer/strategy/chunk_pruning_rule.cpp
+index 4314a0cf4..e93aaa0c4 100644
+--- a/src/lib/optimizer/strategy/chunk_pruning_rule.cpp
++++ b/src/lib/optimizer/strategy/chunk_pruning_rule.cpp
+@@ -100,6 +100,9 @@ std::set<ChunkID> ChunkPruningRule::_compute_exclude_list(const Table& table, co
+   std::set<ChunkID> result;
+
+   for (const auto& operator_predicate : *operator_predicates) {
++    const auto& column_name = table.column_name(operator_predicate.column_id);
++    if (column_name != "l_shipdate" && column_name != "o_orderdate") continue;
++
+     // Cannot prune column-to-column predicates, at the moment. Column-to-placeholder predicates are never prunable.
+     if (!is_variant(operator_predicate.value)) {
+       continue;
+(END)

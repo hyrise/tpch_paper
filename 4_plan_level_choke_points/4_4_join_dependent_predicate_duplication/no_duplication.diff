@@ -1,0 +1,13 @@
+diff --git a/src/lib/optimizer/strategy/predicate_placement_rule.cpp b/src/lib/optimizer/strategy/predicate_placement_rule.cpp
+index 5b63dd2b0..9f96e9458 100644
+--- a/src/lib/optimizer/strategy/predicate_placement_rule.cpp
++++ b/src/lib/optimizer/strategy/predicate_placement_rule.cpp
+@@ -116,7 +116,7 @@ void PredicatePlacementRule::_push_down_traversal(const std::shared_ptr<Abstract
+
+           if (!move_to_left && !move_to_right) {
+             const auto push_down_predicate_node = std::dynamic_pointer_cast<PredicateNode>(push_down_node);
+-            if (join_node->join_mode == JoinMode::Inner && push_down_predicate_node) {
++            if ((false) && join_node->join_mode == JoinMode::Inner && push_down_predicate_node) {
+               // Pre-Join Predicates:
+               // The current predicate could not be pushed down to either side. If we cannot push it down, we might be
+               // able to create additional predicates that perform some pre-selection before the tuples reach the join.

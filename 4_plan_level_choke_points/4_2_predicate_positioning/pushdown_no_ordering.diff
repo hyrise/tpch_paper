@@ -1,0 +1,182 @@
+diff --git a/src/lib/expression/abstract_expression.hpp b/src/lib/expression/abstract_expression.hpp
+index a32b46035..8b1738f10 100644
+--- a/src/lib/expression/abstract_expression.hpp
++++ b/src/lib/expression/abstract_expression.hpp
+@@ -99,6 +99,8 @@ class AbstractExpression : public std::enable_shared_from_this<AbstractExpressio
+   const ExpressionType type;
+   std::vector<std::shared_ptr<AbstractExpression>> arguments;
+
++  size_t id{0};
++
+  protected:
+   /**
+    * Override to check for equality without checking the arguments. No override needed if derived expression has no
+diff --git a/src/lib/logical_query_plan/predicate_node.cpp b/src/lib/logical_query_plan/predicate_node.cpp
+index 06f567ccf..80a3c0379 100644
+--- a/src/lib/logical_query_plan/predicate_node.cpp
++++ b/src/lib/logical_query_plan/predicate_node.cpp
+@@ -24,7 +24,7 @@ std::string PredicateNode::description(const DescriptionMode mode) const {
+   const auto expression_mode = _expression_description_mode(mode);
+
+   std::stringstream stream;
+-  stream << "[Predicate] " << predicate()->description(expression_mode);
++  stream << "[Predicate " << predicate()->id << "] " << predicate()->description(expression_mode);
+   return stream.str();
+ }
+
+diff --git a/src/lib/optimizer/join_ordering/abstract_join_ordering_algorithm.cpp b/src/lib/optimizer/join_ordering/abstract_join_ordering_algorithm.cpp
+index 5c5987492..c5e01324a 100644
+--- a/src/lib/optimizer/join_ordering/abstract_join_ordering_algorithm.cpp
++++ b/src/lib/optimizer/join_ordering/abstract_join_ordering_algorithm.cpp
+@@ -30,7 +30,9 @@ std::shared_ptr<AbstractLQPNode> AbstractJoinOrderingAlgorithm::_add_predicates_
+   }
+
+   std::sort(predicate_nodes_and_cost.begin(), predicate_nodes_and_cost.end(),
+-            [&](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
++            [&](const auto& lhs, const auto& rhs) {
++              return dynamic_cast<PredicateNode&>(*lhs.first).predicate()->id > dynamic_cast<PredicateNode&>(*rhs.first).predicate()->id;
++            });
+
+   predicate_nodes_and_cost.front().first->set_left_input(lqp);
+
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index 916d2dbb6..95b363120 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -110,7 +110,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+
+ // Idea: Reuse materialization from join (e.g., Q5)
+
+-  optimizer->add_rule(std::make_unique<BetweenCompositionRule>());
++  // optimizer->add_rule(std::make_unique<BetweenCompositionRule>());
+
+   optimizer->add_rule(std::make_unique<PredicatePlacementRule>());
+
+@@ -121,7 +121,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   // like diamonds.
+   optimizer->add_rule(std::make_unique<ChunkPruningRule>());
+
+-  optimizer->add_rule(std::make_unique<PredicateSplitUpRule>());
++  // optimizer->add_rule(std::make_unique<PredicateSplitUpRule>());
+
+   optimizer->add_rule(std::make_unique<SubqueryToJoinRule>());
+
+@@ -134,7 +134,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+
+   // Run the PredicatePlacementRule a second time so that semi/anti joins created by the SubqueryToJoinRule and the
+   // SemiJoinReductionRule are properly placed, too.
+-  optimizer->add_rule(std::make_unique<PredicatePlacementRule>());
++  // optimizer->add_rule(std::make_unique<PredicatePlacementRule>());
+
+   optimizer->add_rule(std::make_unique<JoinPredicateOrderingRule>());
+
+@@ -149,7 +149,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+
+   optimizer->add_rule(std::make_unique<IndexScanRule>());
+
+-  optimizer->add_rule(std::make_unique<PredicateMergeRule>());
++  // optimizer->add_rule(std::make_unique<PredicateMergeRule>());
+
+   return optimizer;
+ }
+diff --git a/src/lib/optimizer/strategy/predicate_reordering_rule.cpp b/src/lib/optimizer/strategy/predicate_reordering_rule.cpp
+index 5bff21571..4c0f6b42d 100644
+--- a/src/lib/optimizer/strategy/predicate_reordering_rule.cpp
++++ b/src/lib/optimizer/strategy/predicate_reordering_rule.cpp
+@@ -11,6 +11,7 @@
+ #include "logical_query_plan/abstract_lqp_node.hpp"
+ #include "logical_query_plan/lqp_utils.hpp"
+ #include "logical_query_plan/predicate_node.hpp"
++#include "logical_query_plan/validate_node.hpp"
+ #include "optimizer/join_ordering/join_graph.hpp"
+ #include "statistics/cardinality_estimation_cache.hpp"
+ #include "statistics/cardinality_estimator.hpp"
+@@ -110,7 +111,23 @@ void PredicateReorderingRule::_reorder_predicates(
+
+   // Sort in descending order
+   std::sort(nodes_and_cardinalities.begin(), nodes_and_cardinalities.end(),
+-            [&](auto& left, auto& right) { return left.second > right.second; });
++            [&](auto& left, auto& right) {
++              auto left_id = size_t{9999};
++              auto right_id = size_t{9999};
++
++              if (auto predicate_node = std::dynamic_pointer_cast<PredicateNode>(left.first)) {
++                left_id = predicate_node->predicate()->id;
++              } else if (std::dynamic_pointer_cast<ValidateNode>(left.first)) {
++                left_id = 0;
++              }
++
++              if (auto predicate_node = std::dynamic_pointer_cast<PredicateNode>(right.first)) {
++                right_id = predicate_node->predicate()->id;
++              } else if (std::dynamic_pointer_cast<ValidateNode>(right.first)) {
++                right_id = 0;
++              }
++
++              return left_id < right_id; });
+
+   // Ensure that nodes are chained correctly
+   nodes_and_cardinalities.back().first->set_left_input(input);
+diff --git a/src/lib/sql/sql_translator.cpp b/src/lib/sql/sql_translator.cpp
+index 61c04bbea..46cc1ce49 100644
+--- a/src/lib/sql/sql_translator.cpp
++++ b/src/lib/sql/sql_translator.cpp
+@@ -686,6 +686,7 @@ SQLTranslator::TableSourceState SQLTranslator::_translate_predicated_join(const
+       right_local_predicates.emplace_back(predicate);
+     } else {
+       // Accept any kind of predicate here and let the LQPTranslator fail on those that it doesn't support
++      predicate->id = predicate_id++;
+       join_predicates.emplace_back(predicate);
+     }
+   }
+@@ -1229,7 +1230,9 @@ std::shared_ptr<AbstractLQPNode> SQLTranslator::_translate_predicate_expression(
+   switch (expression->type) {
+     case ExpressionType::Predicate: {
+       const auto predicate_expression = std::static_pointer_cast<AbstractPredicateExpression>(expression);
+-      return PredicateNode::make(expression, current_node);
++      auto p = PredicateNode::make(expression, current_node);
++      static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++      return p;
+     }
+
+     case ExpressionType::Logical: {
+@@ -1238,15 +1241,23 @@ std::shared_ptr<AbstractLQPNode> SQLTranslator::_translate_predicate_expression(
+       switch (logical_expression->logical_operator) {
+         case LogicalOperator::And: {
+           current_node = _translate_predicate_expression(logical_expression->right_operand(), current_node);
+-          return _translate_predicate_expression(logical_expression->left_operand(), current_node);
++          auto p = _translate_predicate_expression(logical_expression->left_operand(), current_node);
++          static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++          return p;
++        }
++        case LogicalOperator::Or: {
++          auto p = PredicateNode::make(expression, current_node);
++          static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++          return p;
+         }
+-        case LogicalOperator::Or:
+-          return PredicateNode::make(expression, current_node);
+       }
+     } break;
+
+-    case ExpressionType::Exists:
+-      return PredicateNode::make(expression, current_node);
++    case ExpressionType::Exists: {
++      auto p = PredicateNode::make(expression, current_node);
++      static_cast<PredicateNode&>(*p).predicate()->id = predicate_id++;
++      return p;
++    }
+
+     default:
+       FailInput("Cannot use this ExpressionType as predicate");
+diff --git a/src/lib/sql/sql_translator.hpp b/src/lib/sql/sql_translator.hpp
+index 95f0afeb0..f2aa3f741 100644
+--- a/src/lib/sql/sql_translator.hpp
++++ b/src/lib/sql/sql_translator.hpp
+@@ -178,6 +178,7 @@ class SQLTranslator final {
+   std::shared_ptr<ParameterIDAllocator> _parameter_id_allocator;
+   std::optional<TableSourceState> _from_clause_result;
+   std::unordered_map<std::string, std::shared_ptr<LQPView>> _with_descriptions;
++  mutable size_t predicate_id{1};
+
+   // "Inflated" because all wildcards will be inflated to the expressions they actually represent
+   std::vector<SelectListElement> _inflated_select_list_elements;

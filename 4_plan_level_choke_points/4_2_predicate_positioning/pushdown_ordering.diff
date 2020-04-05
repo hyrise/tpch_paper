@@ -1,0 +1,66 @@
+Markus.Dreseler@nemea:~/hyrise/build-release/paper_results/cp42d_predicate_order$ gd
+diff --git a/src/lib/expression/abstract_expression.hpp b/src/lib/expression/abstract_expression.hpp
+index a32b46035..8b1738f10 100644
+--- a/src/lib/expression/abstract_expression.hpp
++++ b/src/lib/expression/abstract_expression.hpp
+@@ -99,6 +99,8 @@ class AbstractExpression : public std::enable_shared_from_this<AbstractExpressio
+   const ExpressionType type;
+   std::vector<std::shared_ptr<AbstractExpression>> arguments;
+
++  size_t id{0};
++
+  protected:
+   /**
+    * Override to check for equality without checking the arguments. No override needed if derived expression has no
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index 916d2dbb6..faac6ed03 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -130,7 +130,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   // which does not like semi joins (see above).
+   optimizer->add_rule(std::make_unique<ColumnPruningRule>());
+
+-  optimizer->add_rule(std::make_unique<SemiJoinReductionRule>());
++//  optimizer->add_rule(std::make_unique<SemiJoinReductionRule>());
+
+   // Run the PredicatePlacementRule a second time so that semi/anti joins created by the SubqueryToJoinRule and the
+   // SemiJoinReductionRule are properly placed, too.
+diff --git a/src/lib/optimizer/strategy/column_pruning_rule.cpp b/src/lib/optimizer/strategy/column_pruning_rule.cpp
+index 84f19cf56..4fb66f5d7 100644
+--- a/src/lib/optimizer/strategy/column_pruning_rule.cpp
++++ b/src/lib/optimizer/strategy/column_pruning_rule.cpp
+@@ -202,7 +202,7 @@ void recursively_gather_required_expressions(
+   }
+ }
+
+-void try_join_to_semi_rewrite(
++[[maybe_unused]] void try_join_to_semi_rewrite(
+     const std::shared_ptr<AbstractLQPNode>& node,
+     const std::unordered_map<std::shared_ptr<AbstractLQPNode>, ExpressionUnorderedSet>& required_expressions_by_node) {
+   // Sometimes, joins are not actually used to combine tables but only to check the existence of a tuple in a second
+@@ -355,9 +355,9 @@ void ColumnPruningRule::apply_to(const std::shared_ptr<AbstractLQPNode>& lqp) co
+         }
+       } break;
+
+-      case LQPNodeType::Join: {
+-        try_join_to_semi_rewrite(node, required_expressions_by_node);
+-      } break;
++//      case LQPNodeType::Join: {
++//        try_join_to_semi_rewrite(node, required_expressions_by_node);
++//      } break;
+
+       case LQPNodeType::Projection: {
+         prune_projection_node(node, required_expressions_by_node);
+diff --git a/src/lib/sql/sql_translator.hpp b/src/lib/sql/sql_translator.hpp
+index 95f0afeb0..f2aa3f741 100644
+--- a/src/lib/sql/sql_translator.hpp
++++ b/src/lib/sql/sql_translator.hpp
+@@ -178,6 +178,7 @@ class SQLTranslator final {
+   std::shared_ptr<ParameterIDAllocator> _parameter_id_allocator;
+   std::optional<TableSourceState> _from_clause_result;
+   std::unordered_map<std::string, std::shared_ptr<LQPView>> _with_descriptions;
++  mutable size_t predicate_id{1};
+
+   // "Inflated" because all wildcards will be inflated to the expressions they actually represent
+   std::vector<SelectListElement> _inflated_select_list_elements;
+(END)

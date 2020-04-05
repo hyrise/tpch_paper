@@ -1,0 +1,13 @@
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index 9f34e3c88..9e606de29 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -107,8 +107,6 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   // for now we want the PredicateReorderingRule to have the final say on predicate positions
+   optimizer->add_rule(std::make_unique<PredicatePlacementRule>());
+
+-  optimizer->add_rule(std::make_unique<SubqueryToJoinRule>());
+-
+   optimizer->add_rule(std::make_unique<JoinPredicateOrderingRule>());
+
+   optimizer->add_rule(std::make_unique<InsertLimitInExistsRule>());

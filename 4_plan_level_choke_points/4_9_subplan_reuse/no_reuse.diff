@@ -1,0 +1,13 @@
+diff --git a/src/lib/logical_query_plan/lqp_translator.hpp b/src/lib/logical_query_plan/lqp_translator.hpp
+index 239d695fd..5b7b26b1f 100644
+--- a/src/lib/logical_query_plan/lqp_translator.hpp
++++ b/src/lib/logical_query_plan/lqp_translator.hpp
+@@ -72,7 +72,7 @@ class LQPTranslator {
+   // Cache operator subtrees by LQP node to avoid redundantly executing
+   //   - identical operators (operators below a diamond shape)
+   //   - equal but not identical operators
+-  mutable LQPNodeUnorderedMap<std::shared_ptr<AbstractOperator>> _operator_by_lqp_node;
++  mutable std::unordered_map<std::shared_ptr<AbstractLQPNode>, std::shared_ptr<AbstractOperator>> _operator_by_lqp_node;
+ };
+
+ }  // namespace opossum

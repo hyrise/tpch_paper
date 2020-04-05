@@ -1,0 +1,299 @@
+Markus.Dreseler@nemea:~/hyrise$ gd
+diff --git a/src/benchmarklib/abstract_table_generator.cpp b/src/benchmarklib/abstract_table_generator.cpp
+index 96512b76f..b60550c7a 100644
+--- a/src/benchmarklib/abstract_table_generator.cpp
++++ b/src/benchmarklib/abstract_table_generator.cpp
+@@ -55,7 +55,7 @@ void AbstractTableGenerator::generate_and_store() {
+       auto table_wrapper = std::make_shared<TableWrapper>(table);
+       table_wrapper->execute();
+       auto sort = std::make_shared<Sort>(table_wrapper, table->column_id_by_name(column_name), order_by_mode,
+-                                         _benchmark_config->chunk_size, true);
++                                         _benchmark_config->chunk_size, true, true);
+       sort->execute();
+       const auto immutable_sorted_table = sort->get_output();
+       table = std::make_shared<Table>(immutable_sorted_table->column_definitions(), TableType::Data,
+diff --git a/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp b/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
+index 7c61bf930..cf32256e2 100644
+--- a/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
++++ b/src/benchmarklib/tpch/tpch_benchmark_item_runner.cpp
+@@ -74,7 +74,7 @@ void TPCHBenchmarkItemRunner::on_tables_loaded() {
+   // Make sure that sort order, indexes, and constraints have made it all the way up to here
+   const auto orders_table = Hyrise::get().storage_manager.get_table("orders");
+   const auto first_chunk = orders_table->get_chunk(ChunkID{0});
+-  Assert(first_chunk->ordered_by(), "Ordering information was lost");
++  // Assert(first_chunk->ordered_by(), "Ordering information was lost");
+   if (_config->indexes) {
+     const auto indexed_column_ids = std::vector<ColumnID>{ColumnID{0}};
+     Assert(!first_chunk->get_indexes(indexed_column_ids).empty(), "Index was lost");
+diff --git a/src/lib/operators/sort.cpp b/src/lib/operators/sort.cpp
+index fa80c5819..5a77ae99f 100644
+--- a/src/lib/operators/sort.cpp
++++ b/src/lib/operators/sort.cpp
+@@ -2,6 +2,7 @@
+
+ #include <functional>
+ #include <memory>
++#include <random>
+ #include <string>
+ #include <unordered_map>
+ #include <utility>
+@@ -16,12 +17,13 @@
+ namespace opossum {
+
+ Sort::Sort(const std::shared_ptr<const AbstractOperator>& in, const ColumnID column_id, const OrderByMode order_by_mode,
+-           const size_t output_chunk_size, const bool materialize)
++           const size_t output_chunk_size, const bool materialize, const bool random)
+     : AbstractReadOnlyOperator(OperatorType::Sort, in),
+       _column_id(column_id),
+       _order_by_mode(order_by_mode),
+       _output_chunk_size(output_chunk_size),
+-      _materialize(materialize) {}
++      _materialize(materialize),
++      _random(random) {}
+
+ ColumnID Sort::column_id() const { return _column_id; }
+
+@@ -43,7 +45,7 @@ void Sort::_on_set_parameters(const std::unordered_map<ParameterID, AllTypeVaria
+ std::shared_ptr<const Table> Sort::_on_execute() {
+   _impl = make_unique_by_data_type<AbstractReadOnlyOperatorImpl, SortImpl>(
+       input_table_left()->column_data_type(_column_id), input_table_left(), _column_id, _order_by_mode,
+-      _output_chunk_size, _materialize);
++      _output_chunk_size, _materialize, _random);
+   return _impl->_on_execute();
+ }
+
+@@ -274,12 +276,13 @@ class Sort::SortImpl : public AbstractReadOnlyOperatorImpl {
+   using RowIDValuePair = std::pair<RowID, SortColumnType>;
+
+   SortImpl(const std::shared_ptr<const Table>& table_in, const ColumnID column_id,
+-           const OrderByMode order_by_mode = OrderByMode::Ascending, const size_t output_chunk_size = 0, const bool materialize = false)
++           const OrderByMode order_by_mode = OrderByMode::Ascending, const size_t output_chunk_size = 0, const bool materialize = false, const bool random = false)
+       : _table_in(table_in),
+         _column_id(column_id),
+         _order_by_mode(order_by_mode),
+         _output_chunk_size(output_chunk_size),
+-        _materialize(materialize) {
++        _materialize(materialize),
++        _random(random) {
+     // initialize a structure which can be sorted by std::sort
+     _row_id_value_vector = std::make_shared<std::vector<RowIDValuePair>>();
+     _null_value_rows = std::make_shared<std::vector<RowIDValuePair>>();
+@@ -356,8 +359,14 @@ class Sort::SortImpl : public AbstractReadOnlyOperatorImpl {
+   template <typename Comparator>
+   void _sort_with_operator() {
+     Comparator comparator;
+-    std::stable_sort(_row_id_value_vector->begin(), _row_id_value_vector->end(),
+-                     [comparator](RowIDValuePair a, RowIDValuePair b) { return comparator(a.second, b.second); });
++    if (!_random) {
++      std::stable_sort(_row_id_value_vector->begin(), _row_id_value_vector->end(),
++                       [comparator](RowIDValuePair a, RowIDValuePair b) { return comparator(a.second, b.second); });
++    } else {
++      std::random_device rd;
++      std::mt19937 g(rd());
++      std::shuffle(_row_id_value_vector->begin(), _row_id_value_vector->end(), g);
++    }
+   }
+
+   const std::shared_ptr<const Table> _table_in;
+@@ -368,6 +377,7 @@ class Sort::SortImpl : public AbstractReadOnlyOperatorImpl {
+   // chunk size of the materialized output
+   const size_t _output_chunk_size;
+   const bool _materialize;
++  const bool _random;
+
+   std::shared_ptr<std::vector<RowIDValuePair>> _row_id_value_vector;
+   std::shared_ptr<std::vector<RowIDValuePair>> _null_value_rows;
+diff --git a/src/lib/operators/sort.hpp b/src/lib/operators/sort.hpp
+index 7cd6fb02d..0700e8a4d 100644
+--- a/src/lib/operators/sort.hpp
++++ b/src/lib/operators/sort.hpp
+@@ -24,7 +24,7 @@ class Sort : public AbstractReadOnlyOperator {
+   // The parameter chunk_size sets the chunk size of the output table, which will always be materialized
+   Sort(const std::shared_ptr<const AbstractOperator>& in, const ColumnID column_id,
+        const OrderByMode order_by_mode = OrderByMode::Ascending, const size_t output_chunk_size = Chunk::DEFAULT_SIZE,
+-       const bool materialize = false);
++       const bool materialize = false, const bool random = false);
+
+   ColumnID column_id() const;
+   OrderByMode order_by_mode() const;
+@@ -52,6 +52,7 @@ class Sort : public AbstractReadOnlyOperator {
+   const OrderByMode _order_by_mode;
+   const size_t _output_chunk_size;
+   const bool _materialize;
++  const bool _random;
+ };
+
+ }  // namespace opossum
+diff --git a/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp b/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
+index a54285a1d..d226f6df7 100644
+--- a/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
++++ b/src/lib/operators/table_scan/abstract_dereferenced_column_table_scan_impl.hpp
+@@ -29,7 +29,7 @@ class AbstractDereferencedColumnTableScanImpl : public AbstractTableScanImpl {
+
+   std::shared_ptr<PosList> scan_chunk(const ChunkID chunk_id) const override;
+
+-  const PredicateCondition predicate_condition;
++  mutable PredicateCondition predicate_condition;
+
+  protected:
+   void _scan_reference_segment(const ReferenceSegment& segment, const ChunkID chunk_id, PosList& matches) const;
+diff --git a/src/lib/operators/table_scan/column_between_table_scan_impl.cpp b/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
+index 6e004aa6b..aa6b3d40c 100644
+--- a/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_between_table_scan_impl.cpp
+@@ -88,24 +88,30 @@ void ColumnBetweenTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+
+   auto attribute_vector_iterable = create_iterable_from_attribute_vector(segment);
+
+-  /**
+-   * Early out: All entries (except NULLs) match
+-   */
+-  // NOLINTNEXTLINE - cpplint is drunk
+-  if (lower_bound_value_id == ValueID{0} && upper_bound_value_id == INVALID_VALUE_ID) {
+-    attribute_vector_iterable.with_iterators(position_filter, [&](auto left_it, auto left_end) {
+-      static const auto always_true = [](const auto&) { return true; };
+-      _scan_with_iterators<true>(always_true, left_it, left_end, chunk_id, matches);
+-    });
+-
+-    return;
+-  }
++  // /**
++  //  * Early out: All entries (except NULLs) match
++  //  */
++  // // NOLINTNEXTLINE - cpplint is drunk
++  // if (lower_bound_value_id == ValueID{0} && upper_bound_value_id == INVALID_VALUE_ID) {
++  //   attribute_vector_iterable.with_iterators(position_filter, [&](auto left_it, auto left_end) {
++  //     static const auto always_true = [](const auto&) { return true; };
++  //     _scan_with_iterators<true>(always_true, left_it, left_end, chunk_id, matches);
++  //   });
++
++  //   return;
++  // }
++
++  // /**
++  //  * Early out: No entries match
++  //  */
++  // if (lower_bound_value_id == INVALID_VALUE_ID || lower_bound_value_id >= upper_bound_value_id) {
++  //   return;
++  // }
+
+-  /**
+-   * Early out: No entries match
+-   */
+   if (lower_bound_value_id == INVALID_VALUE_ID || lower_bound_value_id >= upper_bound_value_id) {
+-    return;
++    // Need to repair the value ids if the shortcut is not taken
++    lower_bound_value_id = 0;
++    upper_bound_value_id = 0;
+   }
+
+   /**
+diff --git a/src/lib/operators/table_scan/column_like_table_scan_impl.cpp b/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
+index 0607fe724..72bce40f3 100644
+--- a/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_like_table_scan_impl.cpp
+@@ -81,25 +81,25 @@ void ColumnLikeTableScanImpl::_scan_dictionary_segment(const BaseDictionarySegme
+     result = _find_matches_in_dictionary(*typed_segment.fixed_string_dictionary());
+   }
+
+-  const auto& match_count = result.first;
++  // const auto& match_count = result.first;
+   const auto& dictionary_matches = result.second;
+
+   auto attribute_vector_iterable = create_iterable_from_attribute_vector(segment);
+
+-  // LIKE matches all rows, but we still need to check for NULL
+-  if (match_count == dictionary_matches.size()) {
+-    attribute_vector_iterable.with_iterators(position_filter, [&](auto it, auto end) {
+-      static const auto always_true = [](const auto&) { return true; };
+-      _scan_with_iterators<true>(always_true, it, end, chunk_id, matches);
+-    });
++  // // LIKE matches all rows, but we still need to check for NULL
++  // if (match_count == dictionary_matches.size()) {
++  //   attribute_vector_iterable.with_iterators(position_filter, [&](auto it, auto end) {
++  //     static const auto always_true = [](const auto&) { return true; };
++  //     _scan_with_iterators<true>(always_true, it, end, chunk_id, matches);
++  //   });
+
+-    return;
+-  }
++  //   return;
++  // }
+
+-  // LIKE matches no rows
+-  if (match_count == 0u) {
+-    return;
+-  }
++  // // LIKE matches no rows
++  // if (match_count == 0u) {
++  //   return;
++  // }
+
+   const auto dictionary_lookup = [&dictionary_matches](const auto& position) {
+     return dictionary_matches[position.value()];
+diff --git a/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp b/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
+index 5cc94393f..6f0061658 100644
+--- a/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
++++ b/src/lib/operators/table_scan/column_vs_value_table_scan_impl.cpp
+@@ -88,7 +88,7 @@ void ColumnVsValueTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+    * column >= value  |  value_id >= dict.lower_bound(value)
+    */
+
+-  const auto search_value_id = _get_search_value_id(segment);
++  auto search_value_id = _get_search_value_id(segment);
+
+   /**
+    * Early Outs
+@@ -104,18 +104,20 @@ void ColumnVsValueTableScanImpl::_scan_dictionary_segment(const BaseDictionarySe
+
+   auto iterable = create_iterable_from_attribute_vector(segment);
+
+-  if (_value_matches_all(segment, search_value_id)) {
+-    iterable.with_iterators(position_filter, [&](auto it, auto end) {
+-      static const auto always_true = [](const auto&) { return true; };
+-      // Matches all, so include all rows except those with NULLs in the result.
+-      _scan_with_iterators<true>(always_true, it, end, chunk_id, matches);
+-    });
++  // if (_value_matches_all(segment, search_value_id)) {
++  //   iterable.with_iterators(position_filter, [&](auto it, auto end) {
++  //     static const auto always_true = [](const auto&) { return true; };
++  //     // Matches all, so include all rows except those with NULLs in the result.
++  //     _scan_with_iterators<true>(always_true, it, end, chunk_id, matches);
++  //   });
+
+-    return;
+-  }
++  //   return;
++  // }
+
+   if (_value_matches_none(segment, search_value_id)) {
+-    return;
++    // Fix comparison
++    predicate_condition = PredicateCondition::Equals;
++    search_value_id = INVALID_VALUE_ID - 1;
+   }
+
+   _with_operator_for_dict_segment_scan([&](auto predicate_comparator) {
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index 916d2dbb6..2959fc51c 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -97,7 +97,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   optimizer->add_rule(std::make_unique<ExpressionReductionRule>());
+
+   // TODO this happens below again, do we need it twice?
+-  optimizer->add_rule(std::make_unique<ChunkPruningRule>());
++  // optimizer->add_rule(std::make_unique<ChunkPruningRule>());
+
+   // Run before the JoinOrderingRule so that the latter has simple (non-conjunctive) predicates. However, as the
+   // JoinOrderingRule cannot handle UnionNodes (#1829), do not split disjunctions just yet.
+@@ -119,7 +119,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   // to the StoredTableNode as possible where the ChunkPruningRule can work with them. On the other hand, run it before
+   // the PredicateSplitUp WITH disjunction split up and before the SemiJoinReductionRule as it does not particularly
+   // like diamonds.
+-  optimizer->add_rule(std::make_unique<ChunkPruningRule>());
++  // optimizer->add_rule(std::make_unique<ChunkPruningRule>());
+
+   optimizer->add_rule(std::make_unique<PredicateSplitUpRule>());
+
+(END)

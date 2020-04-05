@@ -1,0 +1,13 @@
+diff --git a/src/lib/optimizer/optimizer.cpp b/src/lib/optimizer/optimizer.cpp
+index 9f34e3c88..d2887f225 100644
+--- a/src/lib/optimizer/optimizer.cpp
++++ b/src/lib/optimizer/optimizer.cpp
+@@ -101,7 +101,7 @@ std::shared_ptr<Optimizer> Optimizer::create_default_optimizer() {
+   // Run before SubqueryToJoinRule, since the Semi/Anti Joins it introduces are opaque to the JoinOrderingRule
+   optimizer->add_rule(std::make_unique<JoinOrderingRule>());
+
+-  optimizer->add_rule(std::make_unique<BetweenCompositionRule>());
++//  optimizer->add_rule(std::make_unique<BetweenCompositionRule>());
+
+   // Position the predicates after the JoinOrderingRule ran. The JOR manipulates predicate placement as well, but
+   // for now we want the PredicateReorderingRule to have the final say on predicate positions
