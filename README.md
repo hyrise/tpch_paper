@@ -8,7 +8,7 @@ For any questions about setting up the environment, reproducing the benchmarks, 
 
 Hyrise can be retrieved from [Github](https://github.com/hyrise/hyrise). Our [Step-by-Step Guide](https://github.com/hyrise/hyrise/wiki/Step-by-Step-Guide) will take you through the steps needed to set up Hyrise, starting the console, or running the TPC-H benchmark.
 
-The patch files in this repository are based on the `mrks/tpch_paper` branch. For better reproducibility, that branch will not be updated with more recent Hyrise developments. To use Hyrise beyond the experiments presented here, please use the current `master` branch.
+The patch files in this repository are based on the `paper/tpch` tag. For better reproducibility, that tag will not be updated with more recent Hyrise developments. To use Hyrise beyond the experiments presented here, please use the current `master` branch.
 
 To execute a benchmark as presented in the paper, first generate baseline results using
 
